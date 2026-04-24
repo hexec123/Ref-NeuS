@@ -1,0 +1,89 @@
+# .gitignore for Python project (UV package manager aware)
+# Keep lockfiles (e.g. uv.lock) committed — ignore only local caches/runtime files.
+
+# Virtual environments
+env*/
+venv*/
+.venv/
+env_refneus/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+.wheelhouse/
+.eggs/
+*.egg
+
+# Install-time artifacts
+__pypackages__/
+
+# Tests and coverage
+.pytest_cache/
+.mypy_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Logs
+*.log
+debug.log
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# C extensions and compiled libs
+*.so
+*.dylib
+
+# Caches
+.cache/
+
+# ML / model artifacts
+runs/
+checkpoints/
+checkpoints/**
+weights/
+*.ckpt
+*.pt
+*.pth
+*.h5
+
+# Large data / outputs (adjust if you version datasets)
+data/
+datasets/
+outputs/
+
+# Node / frontend (if present)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# UV package manager — ignore local caches/workspace but keep lockfile committed
+.uv/
+.uv-cache/
+uv-temp/
+uv-workspace/
+# DO NOT ignore uv.lock (commit your lockfile)
+
+# Misc
+*.swp
+*.tmp
+
