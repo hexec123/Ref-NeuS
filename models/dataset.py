@@ -60,8 +60,8 @@ class Dataset:
         pose_all = []
   
         for frame in data_info['frames']:
-            img_path = os.path.join(self.data_dir, frame['file_path'][2:] + '.png')
-            normal_path = os.path.join(self.data_dir, frame['file_path'][2:] + '_normal' + '.png')
+            img_path = os.path.join(self.data_dir, "/".join(frame['file_path'].split("/")[3:]) + '.png')
+            normal_path = os.path.join(self.data_dir, "/".join(frame['file_path'].split("/")[3:]) + '_normal' + '.png')
             pose_all.append(torch.from_numpy(np.array(frame['transform_matrix'], dtype=np.float32)))
             self.images_lis.append(img_path)
             self.normal_lis.append(normal_path)
