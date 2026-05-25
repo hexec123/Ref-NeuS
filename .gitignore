@@ -81,7 +81,9 @@ yarn-error.log*
 .uv-cache/
 uv-temp/
 uv-workspace/
-# DO NOT ignore uv.lock (commit your lockfile)
+# Commit uv project metadata and lockfile
+!pyproject.toml
+!uv.lock
 
 # Misc
 *.swp
