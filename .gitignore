@@ -70,6 +70,7 @@ weights/
 data/
 datasets/
 outputs/
+work/
 
 # Node / frontend (if present)
 node_modules/

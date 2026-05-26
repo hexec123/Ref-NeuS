@@ -50,33 +50,20 @@ class Dataset:
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
-        self.mask_dir = conf.get_string('mask_dir', default='masks')
-        self.use_mask = conf.get_bool('use_mask', default=False)
-
-        cameras_path = os.path.join(self.data_dir, self.render_cameras_name)
-        if not os.path.exists(cameras_path):
-            for fallback in ('transforms_train.json', 'transforms.json', 'transforms_test.json'):
-                fallback_path = os.path.join(self.data_dir, fallback)
-                if os.path.exists(fallback_path):
-                    cameras_path = fallback_path
-                    break
-        with open(cameras_path, 'r') as fp:
+        
+        with open(os.path.join(self.data_dir, 'transforms_test.json'), 'r') as fp:
             data_info = json.load(fp)
 
         self.images_lis = []
-        self.mask_lis = []
         self.normal_lis = []
-
+        
         pose_all = []
-
+  
         for frame in data_info['frames']:
-            image_name = os.path.basename(frame['file_path'])
-            img_path = os.path.join(self.data_dir, 'images', image_name + '.png')
-            mask_path = os.path.join(self.data_dir, self.mask_dir, image_name + '.png')
-            normal_path = os.path.join(self.data_dir, 'images', image_name + '_normal.png')
+            img_path = os.path.join(self.data_dir, "/".join(frame['file_path'].split("/")[3:]) + '.png')
+            normal_path = os.path.join(self.data_dir, "/".join(frame['file_path'].split("/")[3:]) + '_normal' + '.png')
             pose_all.append(torch.from_numpy(np.array(frame['transform_matrix'], dtype=np.float32)))
             self.images_lis.append(img_path)
-            self.mask_lis.append(mask_path)
             self.normal_lis.append(normal_path)
 
         pose_all = torch.stack(pose_all).cuda()
@@ -105,14 +92,8 @@ class Dataset:
         self.pose_all = torch.matmul(pose_all, torch.diag(torch.tensor([1., -1., -1., 1.])))
         
         self.n_images = len(self.images_lis)
-        images = []
-        for im_name in self.images_lis:
-            image = cv.imread(im_name)
-            if image is None:
-                raise FileNotFoundError(f'Could not read image: {im_name}')
-            images.append(image)
-        self.images_np = np.stack(images) / 256.0
-        self.normal_np = np.zeros_like(self.images_np)
+        self.images_np = np.stack([cv.imread(im_name) for im_name in self.images_lis]) / 256.0
+        self.normal_np = np.stack([cv.imread(im_name) for im_name in self.normal_lis]) 
         self.H, self.W, _ = self.images_np[0].shape
         
         # intrinsic
@@ -127,19 +108,7 @@ class Dataset:
         for i in range(self.images_np.shape[0]):
             self.intrinsics_all.append(intrinsics)
             
-        if self.use_mask:
-            masks = []
-            for mask_name in self.mask_lis:
-                mask = cv.imread(mask_name, cv.IMREAD_GRAYSCALE)
-                if mask is None:
-                    raise FileNotFoundError(f'Could not read mask: {mask_name}')
-                if mask.shape[:2] != (self.H, self.W):
-                    mask = cv.resize(mask, (self.W, self.H), interpolation=cv.INTER_NEAREST)
-                mask = (mask > 127).astype(np.float32)[..., None]
-                masks.append(np.repeat(mask, 3, axis=2))
-            self.masks_np = np.stack(masks)
-        else:
-            self.masks_np = np.ones_like(self.images_np) * 255. / 256.
+        self.masks_np = np.ones_like(self.images_np) * 255. / 256.
         self.images = torch.from_numpy(self.images_np.astype(np.float32)).cuda()  # [n_images, H, W, 3]
         self.masks  = torch.from_numpy(self.masks_np.astype(np.float32)).cuda()  # [n_images, H, W, 3]
         self.intrinsics_all = torch.stack(self.intrinsics_all).to(self.device)   # [n_images, 4, 4]
