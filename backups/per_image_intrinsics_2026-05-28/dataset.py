@@ -52,9 +52,6 @@ class Dataset:
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
         self.mask_dir = conf.get_string('mask_dir', default='masks')
         self.use_mask = conf.get_bool('use_mask', default=False)
-        roi_path = conf.get_string('roi_path', default='')
-        if roi_path and not os.path.isabs(roi_path):
-            roi_path = os.path.join(self.data_dir, roi_path)
 
         cameras_path = os.path.join(self.data_dir, self.render_cameras_name)
         if not os.path.exists(cameras_path):
@@ -71,7 +68,6 @@ class Dataset:
         self.normal_lis = []
 
         pose_all = []
-        frame_intrinsics = []
 
         for frame in data_info['frames']:
             image_name = os.path.basename(frame['file_path'])
@@ -82,14 +78,6 @@ class Dataset:
             self.images_lis.append(img_path)
             self.mask_lis.append(mask_path)
             self.normal_lis.append(normal_path)
-            frame_intrinsics.append({
-                'fl_x': float(frame.get('fl_x', data_info.get('fl_x', 0.0))),
-                'fl_y': float(frame.get('fl_y', frame.get('fl_x', data_info.get('fl_y', data_info.get('fl_x', 0.0))))),
-                'cx': float(frame.get('cx', data_info.get('cx', 0.0))),
-                'cy': float(frame.get('cy', data_info.get('cy', 0.0))),
-                'w': float(frame.get('w', data_info.get('w', 0.0))),
-                'h': float(frame.get('h', data_info.get('h', 0.0))),
-            })
 
         pose_all = torch.stack(pose_all).cuda()
 
@@ -127,26 +115,17 @@ class Dataset:
         self.normal_np = np.zeros_like(self.images_np)
         self.H, self.W, _ = self.images_np[0].shape
         
-        # Intrinsics may vary per frame after per-image cropping/padding.
+        # intrinsic
+        camera_angle_x = float(data_info['camera_angle_x'])
+        self.focal = .5 * self.W / np.tan(.5 * camera_angle_x)
         self.intrinsics_all = []
-        fallback_angle_x = float(data_info.get('camera_angle_x', np.pi / 2.0))
-        fallback_focal = .5 * self.W / np.tan(.5 * fallback_angle_x)
-        for item in frame_intrinsics:
-            src_w = item['w'] if item['w'] > 0 else self.W
-            src_h = item['h'] if item['h'] > 0 else self.H
-            sx = self.W / src_w
-            sy = self.H / src_h
-            fl_x = (item['fl_x'] if item['fl_x'] > 0 else fallback_focal) * sx
-            fl_y = (item['fl_y'] if item['fl_y'] > 0 else fallback_focal) * sy
-            cx = (item['cx'] if item['cx'] > 0 else src_w * 0.5) * sx
-            cy = (item['cy'] if item['cy'] > 0 else src_h * 0.5) * sy
-            intrinsics = torch.Tensor([
-                [fl_x, 0, cx, 0],
-                [0, fl_y, cy, 0],
-                [0, 0, 1, 0],
-                [0, 0, 0, 1]]).float()
+        intrinsics = torch.Tensor([
+            [self.focal, 0, self.W / 2, 0],
+            [0, self.focal, self.H / 2, 0],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]]).float()
+        for i in range(self.images_np.shape[0]):
             self.intrinsics_all.append(intrinsics)
-        self.focal = self.intrinsics_all[0][0, 0]
             
         if self.use_mask:
             masks = []
@@ -170,36 +149,12 @@ class Dataset:
         self.H, self.W = self.images.shape[1], self.images.shape[2]
         self.image_pixels = self.H * self.W
         self.all_rays_o = self.pose_all[:,:3,3]
-        self.roi_boxes = self.load_roi_boxes(roi_path) if roi_path else {}
 
         object_bbox_min = np.array([-1.01, -1.01, -1.01, 1.0])
         object_bbox_max = np.array([ 1.01,  1.01,  1.01, 1.0])
         self.object_bbox_min = object_bbox_min[:3]
         self.object_bbox_max = object_bbox_max[:3]
         print('Load data: End')
-
-    def load_roi_boxes(self, roi_path):
-        with open(roi_path, 'r') as fp:
-            roi_data = json.load(fp)
-
-        raw_images = roi_data.get('images', roi_data)
-        boxes_by_index = {}
-        for img_idx, image_path in enumerate(self.images_lis):
-            image_name = os.path.basename(image_path)
-            image_stem = os.path.splitext(image_name)[0]
-            raw_boxes = raw_images.get(image_name, raw_images.get(image_stem, []))
-            boxes = []
-            for box in raw_boxes:
-                x0, y0, x1, y1 = [int(round(v)) for v in box[:4]]
-                x0, x1 = sorted((max(0, x0), min(self.W - 1, x1)))
-                y0, y1 = sorted((max(0, y0), min(self.H - 1, y1)))
-                if x1 > x0 and y1 > y0:
-                    boxes.append((x0, y0, x1, y1))
-            if boxes:
-                boxes_by_index[img_idx] = boxes
-
-        print(f'Loaded ROI boxes for {len(boxes_by_index)} images from {roi_path}')
-        return boxes_by_index
 
     def gen_rays_at(self, img_idx, resolution_level=1):
         """
@@ -232,26 +187,12 @@ class Dataset:
         rays_o = pose[img_idx, None, None, :3, 3].expand(rays_v.shape)  # W, H, 3
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1), torch.stack([pixels_y, pixels_x], dim=-1).transpose(0, 1)
 
-    def gen_random_rays_at(self, img_idx, batch_size, roi_sample_ratio=0.0):
+    def gen_random_rays_at(self, img_idx, batch_size):
         """
         Generate random rays at world space from one camera.
         """
         pixels_x = torch.randint(low=0, high=self.W, size=[batch_size])
         pixels_y = torch.randint(low=0, high=self.H, size=[batch_size])
-
-        boxes = self.roi_boxes.get(int(img_idx), [])
-        roi_count = int(batch_size * roi_sample_ratio) if boxes else 0
-        if roi_count > 0:
-            box_ids = torch.randint(low=0, high=len(boxes), size=[roi_count])
-            roi_x = []
-            roi_y = []
-            for box_id in box_ids.tolist():
-                x0, y0, x1, y1 = boxes[box_id]
-                roi_x.append(torch.randint(low=x0, high=x1 + 1, size=[1]))
-                roi_y.append(torch.randint(low=y0, high=y1 + 1, size=[1]))
-            pixels_x[:roi_count] = torch.cat(roi_x)
-            pixels_y[:roi_count] = torch.cat(roi_y)
-
         color = self.images[img_idx][(pixels_y, pixels_x)]    # batch_size, 3
         mask = self.masks[img_idx][(pixels_y, pixels_x)]      # batch_size, 3
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float()  # batch_size, 3
@@ -305,3 +246,4 @@ class Dataset:
     def image_at(self, idx, resolution_level):
         img = cv.imread(self.images_lis[idx])
         return (cv.resize(img, (self.W // resolution_level, self.H // resolution_level))).clip(0, 255)
+

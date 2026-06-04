@@ -289,7 +289,7 @@ class NeuSRenderer:
         
         # Normal map
         normals_map = F.normalize(gradients.reshape(batch_size, n_samples, 3), dim=-1)
-        normals_map = (normals_map * weights[:, :128, None]).sum(dim=-2).detach().cpu().numpy()
+        normals_map = (normals_map * weights[:, :n_samples, None]).sum(dim=-2).detach().cpu().numpy()
         
         # Reflection Score
         RS = 10. * torch.ones(batch_size, dtype=torch.float32).cuda()

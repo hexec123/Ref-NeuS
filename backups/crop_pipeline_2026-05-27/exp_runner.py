@@ -45,17 +45,10 @@ class Runner:
         self.report_freq = self.conf.get_int('train.report_freq')
         self.val_freq = self.conf.get_int('train.val_freq')
         self.val_mesh_freq = self.conf.get_int('train.val_mesh_freq')
-        self.val_image_indices = []
-        if 'val_image_indices' in self.conf['train']:
-            self.val_image_indices = [int(idx) for idx in self.conf['train.val_image_indices']]
-        self.train_image_indices = []
-        if 'train_image_indices' in self.conf['train']:
-            self.train_image_indices = [int(idx) for idx in self.conf['train.train_image_indices']]
         self.batch_size = self.conf.get_int('train.batch_size')
         self.validate_resolution_level = self.conf.get_int('train.validate_resolution_level')
         self.learning_rate = self.conf.get_float('train.learning_rate')
         self.learning_rate_alpha = self.conf.get_float('train.learning_rate_alpha')
-        self.constant_learning_rate = self.conf.get_bool('train.constant_learning_rate', default=False)
         self.use_white_bkgd = self.conf.get_bool('train.use_white_bkgd')
         self.warm_up_end = self.conf.get_float('train.warm_up_end', default=0.0)
         self.anneal_end = self.conf.get_float('train.anneal_end', default=0.0)
@@ -63,9 +56,6 @@ class Runner:
         # Weights
         self.igr_weight = self.conf.get_float('train.igr_weight')
         self.mask_weight = self.conf.get_float('train.mask_weight')
-        self.roi_sample_ratio = self.conf.get_float('train.roi_sample_ratio', default=0.0)
-        self.roi_image_sample_ratio = self.conf.get_float('train.roi_image_sample_ratio', default=0.0)
-        self.reset_optimizer_on_continue = self.conf.get_bool('train.reset_optimizer', default=False)
         self.is_continue = is_continue
         self.mode = mode
         self.model_list = []
@@ -119,16 +109,8 @@ class Runner:
         image_perm = self.get_image_perm()
 
         for iter_i in tqdm(range(res_step)):
-            if self.roi_image_sample_ratio > 0.0 and self.dataset.roi_boxes and torch.rand(1).item() < self.roi_image_sample_ratio:
-                if self.train_image_indices:
-                    allowed = set(self.train_image_indices)
-                    roi_image_indices = [idx for idx in self.dataset.roi_boxes.keys() if idx in allowed]
-                else:
-                    roi_image_indices = list(self.dataset.roi_boxes.keys())
-                img_idx = roi_image_indices[torch.randint(low=0, high=len(roi_image_indices), size=[1]).item()]
-            else:
-                img_idx = image_perm[self.iter_step % len(image_perm)]
-            data, uv = self.dataset.gen_random_rays_at(img_idx, self.batch_size, self.roi_sample_ratio)
+            img_idx = image_perm[self.iter_step % len(image_perm)]
+            data, uv = self.dataset.gen_random_rays_at(img_idx, self.batch_size)
 
             rays_o, rays_d, true_rgb, mask = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10]
             near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
@@ -148,11 +130,7 @@ class Runner:
                 self.scene = self.validate_mesh(resolution=128)
 
             if self.iter_step % self.val_freq == 0:
-                if self.val_image_indices:
-                    for val_idx in self.val_image_indices:
-                        self.validate_image(idx=val_idx)
-                else:
-                    self.validate_image()
+                self.validate_image()
                 
             render_out = self.renderer.render(rays_o, rays_d, near, far, img_idx, uv, self.dataset, self.scene,
                                               background_rgb=background_rgb,
@@ -207,9 +185,6 @@ class Runner:
                 image_perm = self.get_image_perm()
 
     def get_image_perm(self):
-        if self.train_image_indices:
-            indices = torch.tensor(self.train_image_indices, dtype=torch.long)
-            return indices[torch.randperm(len(indices))]
         return torch.randperm(self.dataset.n_images)
 
     def get_cos_anneal_ratio(self):
@@ -219,11 +194,6 @@ class Runner:
             return np.min([1.0, self.iter_step / self.anneal_end])
 
     def update_learning_rate(self):
-        if self.constant_learning_rate:
-            for g in self.optimizer.param_groups:
-                g['lr'] = self.learning_rate
-            return
-
         if self.iter_step < self.warm_up_end:
             learning_factor = self.iter_step / self.warm_up_end
         else:
@@ -248,19 +218,18 @@ class Runner:
         copyfile(self.conf_path, os.path.join(self.base_exp_dir, 'recording', 'config.conf'))
 
     def load_checkpoint(self, checkpoint_name):
-        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device, weights_only=False)
+        checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
         self.nerf_outside.load_state_dict(checkpoint['nerf'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
         self.color_network.load_state_dict(checkpoint['color_network_fine'])
-        if not self.reset_optimizer_on_continue:
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.iter_step = checkpoint['iter_step']
 
         logging.info('End')
         
     def load_ckpt_validation(self, ckpt_path):
-        checkpoint = torch.load(ckpt_path, map_location=self.device, weights_only=False)
+        checkpoint = torch.load(ckpt_path, map_location=self.device)
         self.nerf_outside.load_state_dict(checkpoint['nerf'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'])
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
@@ -545,11 +514,9 @@ if __name__ == '__main__':
     runner = Runner(args.conf, args.mode, args.is_continue)
 
     if args.mode == 'train':
-        if args.ckpt_path:
-            runner.load_ckpt_validation(args.ckpt_path)
         runner.train()
     elif args.mode == 'validate_mesh':
-        runner.validate_mesh(resolution=512, threshold=args.mcube_threshold, ckpt_path=args.ckpt_path)
+        runner.validate_mesh(runner.result, resolution=512, threshold=args.mcube_threshold, ckpt_path=args.ckpt_path)
     elif args.mode == 'visualize_video':
         runner.visualize(ckpt_path=args.ckpt_path)
     elif args.mode == 'validate_normal':
